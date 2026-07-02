@@ -18,6 +18,7 @@ const PUBLIC_API = "https://public-api.prozorro.gov.ua/api/2.5/tenders";
 const UUID_RE = /^[a-f0-9]{32}$/i;
 const MAX_PREVIEW_BYTES = 35 * 1024 * 1024;
 const MAX_TEXT_CHARS = 220000;
+const MAX_RTF_CHARS = 8 * 1024 * 1024;
 const MAX_TABLE_ROWS = 120;
 const MAX_TABLE_COLS = 30;
 const MAX_ARCHIVE_ITEMS = 250;
@@ -402,7 +403,7 @@ function decodeRtfHexByte(hex, decoder) {
 }
 
 function rtfToHtml(buffer) {
-  const raw = buffer.toString("latin1").slice(0, MAX_TEXT_CHARS);
+  const raw = buffer.toString("latin1").slice(0, MAX_RTF_CHARS);
   const codepage = raw.match(/\\ansicpg(\d+)/)?.[1] || "1251";
   const decoder = decoderForCodepage(codepage);
   const ignoredDestinations = new Set([
@@ -420,10 +421,77 @@ function rtfToHtml(buffer) {
     "generator",
   ]);
 
-  let text = "";
+  const blocks = [];
+  let paragraph = "";
+  let currentTable = [];
+  let currentRow = null;
+  let currentCell = "";
+  let inTable = false;
   let ignore = false;
   let ucSkip = 1;
   const stack = [];
+
+  function targetAppend(value) {
+    if (!value) return;
+    if (inTable || currentRow) {
+      currentCell += value;
+    } else {
+      paragraph += value;
+    }
+  }
+
+  function cleanCell(value) {
+    return value.replace(/\u0000/g, "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  function flushParagraph() {
+    const cleaned = cleanCell(paragraph).replace(/\s+/g, " ").trim();
+    if (cleaned) blocks.push({ type: "paragraph", text: cleaned });
+    paragraph = "";
+  }
+
+  function flushTable() {
+    if (currentRow && currentRow.some((cell) => cleanCell(cell))) {
+      currentRow.push(cleanCell(currentCell));
+      currentTable.push(currentRow);
+    }
+
+    const rows = currentTable
+      .map((row) => row.map(cleanCell).filter((cell, index, array) => cell || array.length > 1 || index === 0))
+      .filter((row) => row.some(Boolean));
+
+    if (rows.length) blocks.push({ type: "table", rows });
+    currentTable = [];
+    currentRow = null;
+    currentCell = "";
+    inTable = false;
+  }
+
+  function startRow() {
+    flushParagraph();
+    if (currentRow && currentRow.some((cell) => cleanCell(cell))) {
+      currentRow.push(cleanCell(currentCell));
+      currentTable.push(currentRow);
+    }
+    currentRow = [];
+    currentCell = "";
+    inTable = true;
+  }
+
+  function finishCell() {
+    if (!currentRow) currentRow = [];
+    currentRow.push(cleanCell(currentCell));
+    currentCell = "";
+  }
+
+  function finishRow() {
+    if (!currentRow) currentRow = [];
+    if (currentCell.trim()) finishCell();
+    if (currentRow.some(Boolean)) currentTable.push(currentRow);
+    currentRow = null;
+    currentCell = "";
+    inTable = false;
+  }
 
   function startsIgnoredDestination(index) {
     let cursor = index;
@@ -468,19 +536,19 @@ function rtfToHtml(buffer) {
     }
 
     if (char !== "\\") {
-      if (!ignore && char !== "\r" && char !== "\n") text += char;
+      if (!ignore && char !== "\r" && char !== "\n") targetAppend(char);
       continue;
     }
 
     const next = raw[i + 1];
     if (next === "\\" || next === "{" || next === "}") {
-      if (!ignore) text += next;
+      if (!ignore) targetAppend(next);
       i += 1;
       continue;
     }
 
     if (next === "'") {
-      if (!ignore) text += decodeRtfHexByte(raw.slice(i + 2, i + 4), decoder);
+      if (!ignore) targetAppend(decodeRtfHexByte(raw.slice(i + 2, i + 4), decoder));
       i += 3;
       continue;
     }
@@ -501,35 +569,55 @@ function rtfToHtml(buffer) {
       ucSkip = Math.max(0, parameter);
     } else if (word === "u" && Number.isInteger(parameter)) {
       const codePoint = parameter < 0 ? parameter + 65536 : parameter;
-      text += String.fromCodePoint(codePoint);
+      targetAppend(String.fromCodePoint(codePoint));
       i = skipFallback(i + 1, ucSkip) - 1;
+    } else if (word === "trowd") {
+      startRow();
+    } else if (word === "intbl") {
+      inTable = true;
+      if (!currentRow) currentRow = [];
+    } else if (word === "cell") {
+      finishCell();
+    } else if (word === "row") {
+      finishRow();
     } else if (word === "par" || word === "line") {
-      text += "\n";
+      if (inTable || currentRow) {
+        targetAppend("\n");
+      } else {
+        flushParagraph();
+      }
     } else if (word === "tab") {
-      text += "\t";
+      targetAppend("\t");
     } else if (word === "emdash") {
-      text += "—";
+      targetAppend("—");
     } else if (word === "endash") {
-      text += "–";
+      targetAppend("–");
     } else if (word === "lquote" || word === "rquote") {
-      text += "'";
+      targetAppend("'");
     } else if (word === "ldblquote" || word === "rdblquote") {
-      text += '"';
+      targetAppend('"');
     } else if (word === "bullet") {
-      text += "• ";
+      targetAppend("• ");
     }
   }
 
-  const paragraphs = text
-    .replace(/\u0000/g, "")
-    .split(/\n{2,}|\n/)
-    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .slice(0, 800);
+  flushParagraph();
+  flushTable();
 
-  return paragraphs.length
-    ? paragraphs.map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join("")
-    : `<p>${escapeHtml(text.trim() || "No previewable text found in this RTF file.")}</p>`;
+  return blocks.length
+    ? blocks
+        .slice(0, 1200)
+        .map((block) => {
+          if (block.type === "table") {
+            return `<table>${block.rows
+              .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell).replace(/\n/g, "<br>")}</td>`).join("")}</tr>`)
+              .join("")}</table>`;
+          }
+
+          return `<p>${escapeHtml(block.text)}</p>`;
+        })
+        .join("")
+    : "<p>No previewable text found in this RTF file.</p>";
 }
 
 function parseCsv(text) {

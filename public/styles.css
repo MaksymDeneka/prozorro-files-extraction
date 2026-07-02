@@ -656,6 +656,19 @@ body.preview-resizing {
   margin-bottom: 12px;
 }
 
+.preview-docx table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.preview-docx td,
+.preview-docx th {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  vertical-align: top;
+}
+
 .preview-text {
   min-height: calc(100% - 36px);
   padding: 18px;
