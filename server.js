@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import mammoth from "mammoth";
 import readXlsxFile from "read-excel-file/node";
 import JSZip from "jszip";
+import { PNG } from "pngjs";
+import UTIF from "utif";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
@@ -23,6 +25,7 @@ const MAX_RTF_CHARS = 8 * 1024 * 1024;
 const MAX_TABLE_ROWS = 120;
 const MAX_TABLE_COLS = 30;
 const MAX_ARCHIVE_ITEMS = 250;
+const MAX_TIFF_PIXELS = 45_000_000;
 
 const LEVELS = {
   top: "Найвищий",
@@ -303,6 +306,7 @@ function inferPreviewKind({ title, format, contentType }) {
 
   if (ext === ".p7s" || mime.includes("pkcs7")) return "signature";
   if (mime.includes("pdf") || ext === ".pdf") return "pdf";
+  if (mime.includes("tiff") || ext === ".tif" || ext === ".tiff") return "tiff";
   if (mime.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].includes(ext)) return "image";
   if (ext === ".docx" || mime.includes("wordprocessingml.document")) return "docx";
   if (ext === ".rtf" || mime.includes("rtf") || mime.includes("richtext")) return "rtf";
@@ -350,6 +354,7 @@ function safeFilename(title) {
 
 function inlineContentTypeFor(kind, title, contentType) {
   if (kind === "pdf") return "application/pdf";
+  if (kind === "tiff") return "image/png";
   if (kind !== "image") return contentType;
 
   const ext = extensionFromTitle(title);
@@ -364,6 +369,25 @@ function inlineContentTypeFor(kind, title, contentType) {
   ]);
 
   return contentType.toLocaleLowerCase("en-US").startsWith("image/") ? contentType : imageTypes.get(ext) || "application/octet-stream";
+}
+
+function tiffToPngBuffer(buffer) {
+  const source = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  const ifds = UTIF.decode(source);
+  const page = ifds.find((ifd) => ifd.t256 && ifd.t257) || ifds[0];
+
+  if (!page) throw new Error("No previewable image found in this TIFF file.");
+
+  UTIF.decodeImage(source, page);
+
+  const width = Number(page.width);
+  const height = Number(page.height);
+  if (!width || !height) throw new Error("Could not read TIFF image dimensions.");
+  if (width * height > MAX_TIFF_PIXELS) throw new Error("This TIFF image is too large to preview locally.");
+
+  const png = new PNG({ width, height });
+  png.data = Buffer.from(UTIF.toRGBA8(page));
+  return PNG.sync.write(png);
 }
 
 function decodeText(buffer) {
@@ -772,9 +796,9 @@ async function buildDocumentPreview({ documentUrl, title, format }) {
     };
   }
 
-  if (initialKind === "pdf" || initialKind === "image") {
+  if (initialKind === "pdf" || initialKind === "image" || initialKind === "tiff") {
     return {
-      kind: initialKind,
+      kind: initialKind === "tiff" ? "image" : initialKind,
       title,
       fileUrl: `/api/file?url=${encodeURIComponent(safeUrl)}&title=${encodeURIComponent(title || "")}&format=${encodeURIComponent(format || "")}`,
     };
@@ -874,20 +898,22 @@ async function sendDocumentFile(url, response) {
   const { buffer, contentType } = await fetchDocumentBuffer(documentUrl);
   const kind = inferPreviewKind({ title, format, contentType });
 
-  if (kind !== "pdf" && kind !== "image") {
+  if (kind !== "pdf" && kind !== "image" && kind !== "tiff") {
     sendJson(response, 415, { error: "This file type cannot be embedded." });
     return;
   }
 
   const inlineContentType = inlineContentTypeFor(kind, title, contentType);
+  const outputBuffer = kind === "tiff" ? tiffToPngBuffer(buffer) : buffer;
+  const outputTitle = kind === "tiff" ? `${safeFilename(title)}.png` : safeFilename(title);
 
   response.writeHead(200, {
     "content-type": inlineContentType,
-    "content-length": buffer.byteLength,
-    "content-disposition": `inline; filename="${encodeURIComponent(safeFilename(title))}"`,
+    "content-length": outputBuffer.byteLength,
+    "content-disposition": `inline; filename="${encodeURIComponent(outputTitle)}"`,
     "x-content-type-options": "nosniff",
   });
-  response.end(buffer);
+  response.end(outputBuffer);
 }
 
 async function resolveTenderId(input) {

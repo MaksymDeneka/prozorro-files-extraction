@@ -36,7 +36,7 @@ let currentViewFilter = "all";
 let priorityRules = [];
 let lastDeletedKeyword = null;
 const PREVIEW_WIDTH_KEY = "prozorro.previewWidth";
-const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]);
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".tif", ".tiff"]);
 
 function setBusy(isBusy) {
   loading.classList.toggle("hidden", !isBusy);
