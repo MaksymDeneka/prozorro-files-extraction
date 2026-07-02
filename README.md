@@ -33,13 +33,33 @@ npm start
 
 The app accepts either a visible tender ID like `UA-2026-07-02-003111-a` or a Prozorro internal 32-character tender UUID.
 
-Priority is based on normalized filename matching:
+Priority is based on editable normalized filename matching. Use the `Keyword rules` panel in the app to add or remove phrases for Top, High, and Low priority. The saved file is:
+
+```text
+data/priority-rules.json
+```
+
+Default rules:
 
 - Top: `Технічний опис`
 - High: `Додаток 2`, `технічна специфікація`, `відомість ресурсів`, `кошторис`, plus close variants such as `технічне завдання`, `ТЗ`, `дефектний акт`, `обсяги робіт`
 - Low: `договір`, `критерії`, `банківська гарантія`, `довідка`, and related contract/support-document names
 
 The app also lowers `.p7s` signature files and uses Prozorro `documentType` hints when available.
+
+## Loose Matching
+
+Before matching, both filenames and keywords are normalized:
+
+- Unicode text is normalized with `NFKC`
+- Text is lowercased with Ukrainian locale rules
+- Apostrophes are removed
+- punctuation, dashes, underscores, brackets, `№`, and repeated spaces are treated as separators
+- multi-word keywords can match through flexible separators
+- Ukrainian word endings are loosened by matching a short token stem plus following letters
+- numeric terms tolerate leading zeroes, so `Додаток 02` can match `Додаток 2`
+
+Example: `ТЕХНІЧНА_специфікація-final.pdf` can match `технічна специфікація`.
 
 ## API Sources
 

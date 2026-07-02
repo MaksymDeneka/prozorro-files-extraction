@@ -85,6 +85,7 @@ p {
 
 .brand p,
 .rules,
+.keyword-panel,
 .results-header p,
 .document p {
   color: var(--muted);
@@ -97,6 +98,7 @@ p {
 
 .search-form label,
 .rules h2,
+.panel-heading h2,
 .eyebrow {
   color: var(--muted);
   font-size: 12px;
@@ -173,6 +175,113 @@ button:disabled {
 
 .rules strong {
   color: var(--text);
+}
+
+.keyword-panel {
+  display: grid;
+  gap: 14px;
+  font-size: 13px;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#rules-status {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+#rules-status.saved {
+  color: var(--accent-strong);
+}
+
+#rules-status.warning {
+  color: #8f3d22;
+}
+
+#rules-status.error-text {
+  color: #b42318;
+}
+
+.keyword-editor {
+  display: grid;
+  gap: 18px;
+}
+
+.keyword-group {
+  display: grid;
+  gap: 10px;
+}
+
+.keyword-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text);
+}
+
+.keyword-title span {
+  display: inline-grid;
+  min-width: 24px;
+  height: 24px;
+  place-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.keyword-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.keyword-chip {
+  display: inline-flex;
+  min-height: 30px;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+}
+
+.keyword-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.keyword-chip strong {
+  color: var(--muted);
+}
+
+.keyword-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.keyword-add input {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.keyword-add button {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+#save-rules {
+  width: 100%;
 }
 
 .content {

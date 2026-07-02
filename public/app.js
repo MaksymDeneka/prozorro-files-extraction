@@ -1,3 +1,9 @@
+const LEVEL_LABELS = {
+  top: "Top",
+  high: "High",
+  low: "Low",
+};
+
 const form = document.querySelector("#search-form");
 const input = document.querySelector("#tender-id");
 const emptyState = document.querySelector("#empty-state");
@@ -12,9 +18,14 @@ const documentsEl = document.querySelector("#documents");
 const filters = document.querySelector("#filters");
 const copyLinks = document.querySelector("#copy-links");
 const exportJson = document.querySelector("#export-json");
+const keywordEditor = document.querySelector("#keyword-editor");
+const saveRules = document.querySelector("#save-rules");
+const rulesStatus = document.querySelector("#rules-status");
 
 let currentData = null;
 let currentFilter = "all";
+let priorityRules = [];
+let rulesDirty = false;
 
 function setBusy(isBusy) {
   loading.classList.toggle("hidden", !isBusy);
@@ -29,6 +40,16 @@ function showError(message) {
 function hideError() {
   errorBox.textContent = "";
   errorBox.classList.add("hidden");
+}
+
+function setRulesStatus(message, tone = "") {
+  rulesStatus.textContent = message;
+  rulesStatus.className = tone;
+}
+
+function markRulesDirty() {
+  rulesDirty = true;
+  setRulesStatus("Unsaved", "warning");
 }
 
 function formatDate(value) {
@@ -54,6 +75,37 @@ function priorityClass(level) {
   if (level === "Низький") return "priority-low";
   if (level === "Підпис") return "priority-sign";
   return "priority-mid";
+}
+
+function renderKeywordEditor() {
+  keywordEditor.innerHTML = priorityRules
+    .map(
+      (rule) => `
+        <section class="keyword-group" data-rule-id="${rule.id}">
+          <div class="keyword-title">
+            <strong>${LEVEL_LABELS[rule.id] || rule.name}</strong>
+            <span>${rule.keywords.length}</span>
+          </div>
+          <div class="keyword-list">
+            ${rule.keywords
+              .map(
+                (keyword) => `
+                  <button type="button" class="keyword-chip" data-remove-keyword="${escapeHtml(keyword)}">
+                    <span>${escapeHtml(keyword)}</span>
+                    <strong aria-hidden="true">×</strong>
+                  </button>
+                `,
+              )
+              .join("")}
+          </div>
+          <form class="keyword-add">
+            <input aria-label="Add ${LEVEL_LABELS[rule.id] || rule.name} keyword" placeholder="Add keyword" />
+            <button type="submit">Add</button>
+          </form>
+        </section>
+      `,
+    )
+    .join("");
 }
 
 function renderMetrics(data) {
@@ -90,7 +142,7 @@ function renderDocuments() {
 }
 
 function renderDocument(document, index) {
-  const reasons = document.priority.reasons.map((reason) => `<span>${reason}</span>`).join("");
+  const reasons = document.priority.reasons.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("");
   const date = formatDate(document.dateModified || document.datePublished);
   const type = [document.format, document.documentType].filter(Boolean).join(" / ");
 
@@ -101,7 +153,7 @@ function renderDocument(document, index) {
         <div class="doc-topline">
           <span class="badge">${document.priority.level}</span>
           <span class="score">${document.priority.score}</span>
-          ${document.source ? `<span class="source">${document.source}</span>` : ""}
+          ${document.source ? `<span class="source">${escapeHtml(document.source)}</span>` : ""}
         </div>
         <h3>${escapeHtml(document.title)}</h3>
         <div class="reasons">${reasons}</div>
@@ -134,27 +186,35 @@ function renderResults(data) {
   results.classList.remove("hidden");
 }
 
-function downloadText(filename, text) {
-  const blob = new Blob([text], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
+async function loadRules() {
+  const response = await fetch("/api/rules");
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Could not load keyword rules.");
+  priorityRules = data.rules;
+  rulesDirty = false;
+  renderKeywordEditor();
+  setRulesStatus("Saved", "saved");
 }
 
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+async function saveKeywordRules() {
+  const response = await fetch("/api/rules", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ rules: priorityRules }),
+  });
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Could not save keyword rules.");
+  priorityRules = data.rules;
+  rulesDirty = false;
+  renderKeywordEditor();
+  setRulesStatus("Saved", "saved");
+
+  if (currentData && input.value.trim()) {
+    await analyzeCurrentTender();
+  }
 }
 
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
+async function analyzeCurrentTender() {
   hideError();
   results.classList.add("hidden");
   setBusy(true);
@@ -175,6 +235,75 @@ form.addEventListener("submit", async (event) => {
   } finally {
     setBusy(false);
   }
+}
+
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+keywordEditor.addEventListener("submit", (event) => {
+  const formEl = event.target.closest(".keyword-add");
+  if (!formEl) return;
+
+  event.preventDefault();
+  const group = formEl.closest(".keyword-group");
+  const rule = priorityRules.find((item) => item.id === group.dataset.ruleId);
+  const inputEl = formEl.querySelector("input");
+  const keyword = inputEl.value.trim();
+
+  if (!rule || !keyword || rule.keywords.some((item) => item.toLocaleLowerCase("uk-UA") === keyword.toLocaleLowerCase("uk-UA"))) return;
+  rule.keywords.push(keyword);
+  inputEl.value = "";
+  markRulesDirty();
+  renderKeywordEditor();
+});
+
+keywordEditor.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-remove-keyword]");
+  if (!button) return;
+
+  const group = button.closest(".keyword-group");
+  const rule = priorityRules.find((item) => item.id === group.dataset.ruleId);
+  if (!rule) return;
+
+  rule.keywords = rule.keywords.filter((keyword) => keyword !== button.dataset.removeKeyword);
+  markRulesDirty();
+  renderKeywordEditor();
+});
+
+saveRules.addEventListener("click", async () => {
+  if (!rulesDirty) return;
+  saveRules.disabled = true;
+  setRulesStatus("Saving", "");
+
+  try {
+    await saveKeywordRules();
+  } catch (error) {
+    setRulesStatus("Error", "error-text");
+    showError(error.message || "Could not save keyword rules.");
+  } finally {
+    saveRules.disabled = false;
+  }
+});
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await analyzeCurrentTender();
 });
 
 filters.addEventListener("click", (event) => {
@@ -202,3 +331,5 @@ exportJson.addEventListener("click", () => {
   if (!currentData) return;
   downloadText(`${currentData.tender.tenderID || currentData.tender.id}-documents.json`, JSON.stringify(currentData, null, 2));
 });
+
+loadRules().catch((error) => showError(error.message || "Could not load keyword rules."));
