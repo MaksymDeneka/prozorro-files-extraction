@@ -25,11 +25,15 @@ const previewPanel = document.querySelector("#preview-panel");
 const previewTitle = document.querySelector("#preview-title");
 const previewBody = document.querySelector("#preview-body");
 const previewClose = document.querySelector("#preview-close");
+const previewResizer = document.querySelector("#preview-resizer");
+const previewNarrower = document.querySelector("#preview-narrower");
+const previewWider = document.querySelector("#preview-wider");
 
 let currentData = null;
 let currentFilter = "all";
 let priorityRules = [];
 let lastDeletedKeyword = null;
+const PREVIEW_WIDTH_KEY = "prozorro.previewWidth";
 
 function setBusy(isBusy) {
   loading.classList.toggle("hidden", !isBusy);
@@ -53,6 +57,29 @@ function setRulesStatus(message, tone = "") {
 
 function setUndoState() {
   undoDelete.disabled = !lastDeletedKeyword;
+}
+
+function clampPreviewWidth(width) {
+  const maxWidth = Math.max(640, window.innerWidth - 48);
+  return Math.min(Math.max(640, width), maxWidth);
+}
+
+function applyPreviewWidth(width) {
+  if (window.innerWidth <= 900) {
+    previewPanel.style.width = "";
+    return;
+  }
+
+  previewPanel.style.width = `${clampPreviewWidth(width)}px`;
+}
+
+function currentPreviewWidth() {
+  return previewPanel.getBoundingClientRect().width || Math.min(1040, window.innerWidth - 48);
+}
+
+function loadPreviewWidth() {
+  const saved = Number(localStorage.getItem(PREVIEW_WIDTH_KEY));
+  applyPreviewWidth(Number.isFinite(saved) && saved > 0 ? saved : Math.min(1040, window.innerWidth - 48));
 }
 
 function formatDate(value) {
@@ -304,6 +331,7 @@ function showPreviewLoading(document) {
       <span>Loading preview</span>
     </div>
   `;
+  loadPreviewWidth();
   previewPanel.classList.remove("hidden");
 }
 
@@ -346,7 +374,7 @@ function renderPreview(payload) {
     return;
   }
 
-  if (payload.kind === "docx") {
+  if (payload.kind === "docx" || payload.kind === "rtf") {
     previewBody.innerHTML = `
       <article class="preview-docx">${sanitizePreviewHtml(payload.html || "")}</article>
       ${payload.warnings?.length ? `<div class="preview-note">${payload.warnings.map(escapeHtml).join("<br>")}</div>` : ""}
@@ -492,6 +520,59 @@ documentsEl.addEventListener("click", async (event) => {
 });
 
 previewClose.addEventListener("click", closePreview);
+
+previewNarrower.addEventListener("click", () => {
+  const width = clampPreviewWidth(currentPreviewWidth() - 160);
+  previewPanel.style.width = `${width}px`;
+  localStorage.setItem(PREVIEW_WIDTH_KEY, String(width));
+});
+
+previewWider.addEventListener("click", () => {
+  const width = clampPreviewWidth(currentPreviewWidth() + 160);
+  previewPanel.style.width = `${width}px`;
+  localStorage.setItem(PREVIEW_WIDTH_KEY, String(width));
+});
+
+function updatePreviewWidthFromClientX(clientX) {
+  const width = clampPreviewWidth(window.innerWidth - clientX - 24);
+  previewPanel.style.width = `${width}px`;
+  localStorage.setItem(PREVIEW_WIDTH_KEY, String(width));
+}
+
+function beginPreviewResize(event, moveEventName, upEventName) {
+  if (window.innerWidth <= 900) return;
+
+  event.preventDefault();
+  document.body.classList.add("preview-resizing");
+
+  const handleMove = (moveEvent) => {
+    updatePreviewWidthFromClientX(moveEvent.clientX);
+  };
+
+  const handleUp = () => {
+    document.body.classList.remove("preview-resizing");
+    document.removeEventListener(moveEventName, handleMove);
+    document.removeEventListener(upEventName, handleUp);
+    document.removeEventListener("pointercancel", handleUp);
+  };
+
+  document.addEventListener(moveEventName, handleMove);
+  document.addEventListener(upEventName, handleUp);
+  document.addEventListener("pointercancel", handleUp);
+}
+
+previewResizer.addEventListener("pointerdown", (event) => {
+  previewResizer.setPointerCapture(event.pointerId);
+  beginPreviewResize(event, "pointermove", "pointerup");
+});
+
+previewResizer.addEventListener("mousedown", (event) => {
+  beginPreviewResize(event, "mousemove", "mouseup");
+});
+
+window.addEventListener("resize", () => {
+  if (!previewPanel.classList.contains("hidden")) loadPreviewWidth();
+});
 
 copyLinks.addEventListener("click", async () => {
   if (!currentData) return;

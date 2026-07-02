@@ -38,9 +38,12 @@ Supported preview types:
 
 - PDF and images: embedded viewer through the local app
 - DOCX: extracted HTML/text preview
+- RTF: converted document-style HTML/text preview
 - XLSX and CSV: table preview, limited to the first rows/columns
 - TXT, XML, JSON, HTML: text preview
 - ZIP: file list preview
+
+The preview panel opens wide by default. Use the `-` / `+` buttons or drag its left edge to resize it; the chosen width is remembered in the browser.
 
 Unsupported or skipped:
 

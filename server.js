@@ -303,6 +303,7 @@ function inferPreviewKind({ title, format, contentType }) {
   if (mime.includes("pdf") || ext === ".pdf") return "pdf";
   if (mime.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(ext)) return "image";
   if (ext === ".docx" || mime.includes("wordprocessingml.document")) return "docx";
+  if (ext === ".rtf" || mime.includes("rtf") || mime.includes("richtext")) return "rtf";
   if (ext === ".xlsx" || mime.includes("spreadsheetml.sheet")) return "xlsx";
   if (ext === ".csv" || mime.includes("csv")) return "csv";
   if (ext === ".txt" || ext === ".xml" || ext === ".json" || ext === ".html" || ext === ".htm" || mime.startsWith("text/")) return "text";
@@ -365,6 +366,170 @@ function inlineContentTypeFor(kind, title, contentType) {
 function decodeText(buffer) {
   const sample = buffer.subarray(0, Math.min(buffer.byteLength, MAX_TEXT_CHARS));
   return new TextDecoder("utf-8", { fatal: false }).decode(sample);
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function decoderForCodepage(codepage) {
+  const labels = new Map([
+    ["65001", "utf-8"],
+    ["1250", "windows-1250"],
+    ["1251", "windows-1251"],
+    ["1252", "windows-1252"],
+    ["1253", "windows-1253"],
+    ["1254", "windows-1254"],
+    ["1257", "windows-1257"],
+  ]);
+
+  try {
+    return new TextDecoder(labels.get(String(codepage)) || "windows-1251", { fatal: false });
+  } catch {
+    return new TextDecoder("windows-1251", { fatal: false });
+  }
+}
+
+function decodeRtfHexByte(hex, decoder) {
+  const byte = Number.parseInt(hex, 16);
+  if (Number.isNaN(byte)) return "";
+  return decoder.decode(Uint8Array.from([byte]));
+}
+
+function rtfToHtml(buffer) {
+  const raw = buffer.toString("latin1").slice(0, MAX_TEXT_CHARS);
+  const codepage = raw.match(/\\ansicpg(\d+)/)?.[1] || "1251";
+  const decoder = decoderForCodepage(codepage);
+  const ignoredDestinations = new Set([
+    "fonttbl",
+    "colortbl",
+    "stylesheet",
+    "info",
+    "pict",
+    "object",
+    "filetbl",
+    "datastore",
+    "themedata",
+    "xmlnstbl",
+    "latentstyles",
+    "generator",
+  ]);
+
+  let text = "";
+  let ignore = false;
+  let ucSkip = 1;
+  const stack = [];
+
+  function startsIgnoredDestination(index) {
+    let cursor = index;
+    if (raw[cursor] !== "\\") return false;
+    cursor += 1;
+    if (raw[cursor] === "*") {
+      cursor += 1;
+      if (raw[cursor] === "\\") cursor += 1;
+      return true;
+    }
+
+    const match = raw.slice(cursor).match(/^([a-zA-Z]+)/);
+    return Boolean(match && ignoredDestinations.has(match[1].toLocaleLowerCase("en-US")));
+  }
+
+  function skipFallback(index, count) {
+    let cursor = index;
+    let remaining = count;
+    while (remaining > 0 && cursor < raw.length) {
+      if (raw[cursor] === "\\" && raw[cursor + 1] === "'") {
+        cursor += 4;
+      } else {
+        cursor += 1;
+      }
+      remaining -= 1;
+    }
+    return cursor;
+  }
+
+  for (let i = 0; i < raw.length; i += 1) {
+    const char = raw[i];
+
+    if (char === "{") {
+      stack.push(ignore);
+      ignore = ignore || startsIgnoredDestination(i + 1);
+      continue;
+    }
+
+    if (char === "}") {
+      ignore = stack.pop() || false;
+      continue;
+    }
+
+    if (char !== "\\") {
+      if (!ignore && char !== "\r" && char !== "\n") text += char;
+      continue;
+    }
+
+    const next = raw[i + 1];
+    if (next === "\\" || next === "{" || next === "}") {
+      if (!ignore) text += next;
+      i += 1;
+      continue;
+    }
+
+    if (next === "'") {
+      if (!ignore) text += decodeRtfHexByte(raw.slice(i + 2, i + 4), decoder);
+      i += 3;
+      continue;
+    }
+
+    const control = raw.slice(i + 1).match(/^([a-zA-Z]+)(-?\d+)? ?/);
+    if (!control) {
+      i += 1;
+      continue;
+    }
+
+    const word = control[1].toLocaleLowerCase("en-US");
+    const parameter = control[2] === undefined ? null : Number.parseInt(control[2], 10);
+    i += control[0].length;
+
+    if (ignore) continue;
+
+    if (word === "uc" && Number.isInteger(parameter)) {
+      ucSkip = Math.max(0, parameter);
+    } else if (word === "u" && Number.isInteger(parameter)) {
+      const codePoint = parameter < 0 ? parameter + 65536 : parameter;
+      text += String.fromCodePoint(codePoint);
+      i = skipFallback(i + 1, ucSkip) - 1;
+    } else if (word === "par" || word === "line") {
+      text += "\n";
+    } else if (word === "tab") {
+      text += "\t";
+    } else if (word === "emdash") {
+      text += "—";
+    } else if (word === "endash") {
+      text += "–";
+    } else if (word === "lquote" || word === "rquote") {
+      text += "'";
+    } else if (word === "ldblquote" || word === "rdblquote") {
+      text += '"';
+    } else if (word === "bullet") {
+      text += "• ";
+    }
+  }
+
+  const paragraphs = text
+    .replace(/\u0000/g, "")
+    .split(/\n{2,}|\n/)
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 800);
+
+  return paragraphs.length
+    ? paragraphs.map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join("")
+    : `<p>${escapeHtml(text.trim() || "No previewable text found in this RTF file.")}</p>`;
 }
 
 function parseCsv(text) {
@@ -443,6 +608,15 @@ async function buildDocumentPreview({ documentUrl, title, format }) {
       title,
       html: result.value,
       warnings: result.messages?.map((message) => message.message).filter(Boolean) || [],
+    };
+  }
+
+  if (kind === "rtf") {
+    return {
+      kind,
+      title,
+      html: rtfToHtml(buffer),
+      warnings: [],
     };
   }
 
