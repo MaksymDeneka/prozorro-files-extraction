@@ -3,6 +3,9 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import mammoth from "mammoth";
+import readXlsxFile from "read-excel-file/node";
+import JSZip from "jszip";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
@@ -13,6 +16,11 @@ const PORT = Number(process.env.PORT || 3477);
 const PORTAL_API = "https://prozorro.gov.ua/api/tenders";
 const PUBLIC_API = "https://public-api.prozorro.gov.ua/api/2.5/tenders";
 const UUID_RE = /^[a-f0-9]{32}$/i;
+const MAX_PREVIEW_BYTES = 35 * 1024 * 1024;
+const MAX_TEXT_CHARS = 220000;
+const MAX_TABLE_ROWS = 120;
+const MAX_TABLE_COLS = 30;
+const MAX_ARCHIVE_ITEMS = 250;
 
 const LEVELS = {
   top: "Найвищий",
@@ -268,6 +276,268 @@ async function fetchJson(url) {
   return response.json();
 }
 
+function assertAllowedDocumentUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("Invalid document URL.");
+  }
+
+  if (parsed.protocol !== "https:" || !parsed.hostname.endsWith("prozorro.gov.ua")) {
+    throw new Error("Only Prozorro document URLs can be previewed.");
+  }
+
+  return parsed.toString();
+}
+
+function extensionFromTitle(title) {
+  return path.extname(String(title || "").split("?")[0]).toLocaleLowerCase("uk-UA");
+}
+
+function inferPreviewKind({ title, format, contentType }) {
+  const ext = extensionFromTitle(title);
+  const mime = String(format || contentType || "").toLocaleLowerCase("en-US");
+
+  if (ext === ".p7s" || mime.includes("pkcs7")) return "signature";
+  if (mime.includes("pdf") || ext === ".pdf") return "pdf";
+  if (mime.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(ext)) return "image";
+  if (ext === ".docx" || mime.includes("wordprocessingml.document")) return "docx";
+  if (ext === ".xlsx" || mime.includes("spreadsheetml.sheet")) return "xlsx";
+  if (ext === ".csv" || mime.includes("csv")) return "csv";
+  if (ext === ".txt" || ext === ".xml" || ext === ".json" || ext === ".html" || ext === ".htm" || mime.startsWith("text/")) return "text";
+  if ([".zip", ".rar", ".7z"].includes(ext) || mime.includes("zip") || mime.includes("rar") || mime.includes("7z")) return "archive";
+  return "unsupported";
+}
+
+async function fetchDocumentBuffer(documentUrl) {
+  const safeUrl = assertAllowedDocumentUrl(documentUrl);
+  const response = await fetch(safeUrl, {
+    headers: {
+      accept: "*/*",
+      "user-agent": "prozorro-local-document-prioritizer/0.1",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Document request failed: ${response.status} ${response.statusText}`);
+  }
+
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (contentLength > MAX_PREVIEW_BYTES) {
+    throw new Error("This file is too large to preview locally.");
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.byteLength > MAX_PREVIEW_BYTES) {
+    throw new Error("This file is too large to preview locally.");
+  }
+
+  return {
+    buffer,
+    contentType: response.headers.get("content-type") || "application/octet-stream",
+  };
+}
+
+function safeFilename(title) {
+  return String(title || "document")
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .slice(0, 180);
+}
+
+function inlineContentTypeFor(kind, title, contentType) {
+  if (kind === "pdf") return "application/pdf";
+  if (kind !== "image") return contentType;
+
+  const ext = extensionFromTitle(title);
+  const imageTypes = new Map([
+    [".png", "image/png"],
+    [".jpg", "image/jpeg"],
+    [".jpeg", "image/jpeg"],
+    [".gif", "image/gif"],
+    [".webp", "image/webp"],
+    [".bmp", "image/bmp"],
+  ]);
+
+  return contentType.toLocaleLowerCase("en-US").startsWith("image/") ? contentType : imageTypes.get(ext) || "application/octet-stream";
+}
+
+function decodeText(buffer) {
+  const sample = buffer.subarray(0, Math.min(buffer.byteLength, MAX_TEXT_CHARS));
+  return new TextDecoder("utf-8", { fatal: false }).decode(sample);
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let value = "";
+  let quoted = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const next = text[i + 1];
+
+    if (quoted) {
+      if (char === '"' && next === '"') {
+        value += '"';
+        i += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        value += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      quoted = true;
+    } else if (char === ",") {
+      row.push(value);
+      value = "";
+    } else if (char === "\n") {
+      row.push(value);
+      rows.push(row);
+      row = [];
+      value = "";
+      if (rows.length >= MAX_TABLE_ROWS) break;
+    } else if (char !== "\r") {
+      value += char;
+    }
+  }
+
+  if (rows.length < MAX_TABLE_ROWS && (value || row.length)) {
+    row.push(value);
+    rows.push(row);
+  }
+
+  return rows.map((item) => item.slice(0, MAX_TABLE_COLS));
+}
+
+async function buildDocumentPreview({ documentUrl, title, format }) {
+  const safeUrl = assertAllowedDocumentUrl(documentUrl);
+  const initialKind = inferPreviewKind({ title, format });
+
+  if (initialKind === "signature") {
+    return {
+      kind: "unsupported",
+      title,
+      message: "Signature files are not previewed.",
+    };
+  }
+
+  if (initialKind === "pdf" || initialKind === "image") {
+    return {
+      kind: initialKind,
+      title,
+      fileUrl: `/api/file?url=${encodeURIComponent(safeUrl)}&title=${encodeURIComponent(title || "")}&format=${encodeURIComponent(format || "")}`,
+    };
+  }
+
+  const { buffer, contentType } = await fetchDocumentBuffer(safeUrl);
+  const kind = inferPreviewKind({ title, format, contentType });
+
+  if (kind === "docx") {
+    const result = await mammoth.convertToHtml({ buffer });
+    return {
+      kind,
+      title,
+      html: result.value,
+      warnings: result.messages?.map((message) => message.message).filter(Boolean) || [],
+    };
+  }
+
+  if (kind === "xlsx") {
+    const rows = await readXlsxFile(buffer);
+    return {
+      kind,
+      title,
+      sheets: [
+        {
+          name: "Sheet 1",
+          rows: rows.slice(0, MAX_TABLE_ROWS).map((row) => row.slice(0, MAX_TABLE_COLS)),
+        },
+      ],
+      truncated: rows.length > MAX_TABLE_ROWS || rows.some((row) => row.length > MAX_TABLE_COLS),
+    };
+  }
+
+  if (kind === "csv") {
+    const text = decodeText(buffer);
+    const rows = parseCsv(text);
+    return {
+      kind: "xlsx",
+      title,
+      sheets: [{ name: "CSV", rows }],
+      truncated: text.length >= MAX_TEXT_CHARS || rows.length >= MAX_TABLE_ROWS,
+    };
+  }
+
+  if (kind === "text") {
+    const text = decodeText(buffer);
+    return {
+      kind,
+      title,
+      text,
+      truncated: buffer.byteLength > Buffer.byteLength(text),
+    };
+  }
+
+  if (kind === "archive") {
+    if (extensionFromTitle(title) !== ".zip" && !contentType.toLocaleLowerCase("en-US").includes("zip")) {
+      return {
+        kind: "unsupported",
+        title,
+        message: "Archive preview is currently available for ZIP files only.",
+      };
+    }
+
+    const zip = await JSZip.loadAsync(buffer);
+    const entries = Object.values(zip.files)
+      .slice(0, MAX_ARCHIVE_ITEMS)
+      .map((entry) => ({
+        name: entry.name,
+        directory: entry.dir,
+        date: entry.date?.toISOString?.() || "",
+      }));
+
+    return {
+      kind: "archive",
+      title,
+      entries,
+      truncated: Object.keys(zip.files).length > MAX_ARCHIVE_ITEMS,
+    };
+  }
+
+  return {
+    kind: "unsupported",
+    title,
+    message: "This file type cannot be previewed yet.",
+  };
+}
+
+async function sendDocumentFile(url, response) {
+  const documentUrl = assertAllowedDocumentUrl(url.searchParams.get("url"));
+  const title = url.searchParams.get("title") || "document";
+  const format = url.searchParams.get("format") || "";
+  const { buffer, contentType } = await fetchDocumentBuffer(documentUrl);
+  const kind = inferPreviewKind({ title, format, contentType });
+
+  if (kind !== "pdf" && kind !== "image") {
+    sendJson(response, 415, { error: "This file type cannot be embedded." });
+    return;
+  }
+
+  const inlineContentType = inlineContentTypeFor(kind, title, contentType);
+
+  response.writeHead(200, {
+    "content-type": inlineContentType,
+    "content-length": buffer.byteLength,
+    "content-disposition": `inline; filename="${encodeURIComponent(safeFilename(title))}"`,
+    "x-content-type-options": "nosniff",
+  });
+  response.end(buffer);
+}
+
 async function resolveTenderId(input) {
   const value = String(input || "").trim();
   if (!value) throw new Error("Tender ID is required.");
@@ -375,6 +645,21 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 200, { rules: await savePriorityRules(payload.rules) });
         return;
       }
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/preview") {
+      const payload = await buildDocumentPreview({
+        documentUrl: url.searchParams.get("url"),
+        title: url.searchParams.get("title") || "",
+        format: url.searchParams.get("format") || "",
+      });
+      sendJson(response, 200, payload);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/file") {
+      await sendDocumentFile(url, response);
+      return;
     }
 
     await serveStatic(request, response);

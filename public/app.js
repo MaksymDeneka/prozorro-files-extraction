@@ -21,6 +21,10 @@ const exportJson = document.querySelector("#export-json");
 const keywordEditor = document.querySelector("#keyword-editor");
 const rulesStatus = document.querySelector("#rules-status");
 const undoDelete = document.querySelector("#undo-delete");
+const previewPanel = document.querySelector("#preview-panel");
+const previewTitle = document.querySelector("#preview-title");
+const previewBody = document.querySelector("#preview-body");
+const previewClose = document.querySelector("#preview-close");
 
 let currentData = null;
 let currentFilter = "all";
@@ -164,6 +168,7 @@ function renderDocument(document, index) {
         <p>${[type, date].filter(Boolean).join(" • ")}</p>
       </div>
       <div class="doc-actions">
+        ${document.url ? `<button type="button" data-preview-key="${document.previewKey}">Preview</button>` : ""}
         ${document.url ? `<a href="${document.url}" target="_blank" rel="noreferrer">Download</a>` : ""}
       </div>
     </article>
@@ -171,7 +176,10 @@ function renderDocument(document, index) {
 }
 
 function renderResults(data) {
-  currentData = data;
+  currentData = {
+    ...data,
+    documents: data.documents.map((document, index) => ({ ...document, previewKey: String(index) })),
+  };
   resultId.textContent = data.tender.tenderID || data.tender.id;
   resultTitle.textContent = data.tender.title || "Untitled tender";
   resultMeta.textContent = [
@@ -271,6 +279,138 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function sanitizePreviewHtml(html) {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const blocked = template.content.querySelectorAll("script, style, iframe, object, embed, link, meta");
+  blocked.forEach((node) => node.remove());
+  template.content.querySelectorAll("*").forEach((node) => {
+    [...node.attributes].forEach((attribute) => {
+      const name = attribute.name.toLocaleLowerCase("en-US");
+      const value = attribute.value.trim().toLocaleLowerCase("en-US");
+      if (name.startsWith("on") || (["href", "src"].includes(name) && value.startsWith("javascript:"))) {
+        node.removeAttribute(attribute.name);
+      }
+    });
+  });
+  return template.innerHTML;
+}
+
+function showPreviewLoading(document) {
+  previewTitle.textContent = document.title || "Document preview";
+  previewBody.innerHTML = `
+    <div class="preview-state">
+      <div class="pulse"></div>
+      <span>Loading preview</span>
+    </div>
+  `;
+  previewPanel.classList.remove("hidden");
+}
+
+function renderPreviewTable(sheet) {
+  const rows = sheet.rows || [];
+  if (!rows.length) return `<div class="preview-state">No rows found.</div>`;
+
+  return `
+    <section class="preview-sheet">
+      <h3>${escapeHtml(sheet.name || "Sheet")}</h3>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            ${rows
+              .map(
+                (row) => `
+                  <tr>
+                    ${row.map((cell) => `<td>${escapeHtml(cell ?? "")}</td>`).join("")}
+                  </tr>
+                `,
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderPreview(payload) {
+  previewTitle.textContent = payload.title || "Document preview";
+
+  if (payload.kind === "pdf") {
+    previewBody.innerHTML = `<iframe class="preview-frame" src="${payload.fileUrl}" title="PDF preview"></iframe>`;
+    return;
+  }
+
+  if (payload.kind === "image") {
+    previewBody.innerHTML = `<div class="preview-image-wrap"><img src="${payload.fileUrl}" alt="Document preview" /></div>`;
+    return;
+  }
+
+  if (payload.kind === "docx") {
+    previewBody.innerHTML = `
+      <article class="preview-docx">${sanitizePreviewHtml(payload.html || "")}</article>
+      ${payload.warnings?.length ? `<div class="preview-note">${payload.warnings.map(escapeHtml).join("<br>")}</div>` : ""}
+    `;
+    return;
+  }
+
+  if (payload.kind === "xlsx") {
+    previewBody.innerHTML = `
+      ${(payload.sheets || []).map(renderPreviewTable).join("")}
+      ${payload.truncated ? `<div class="preview-note">Preview is truncated.</div>` : ""}
+    `;
+    return;
+  }
+
+  if (payload.kind === "text") {
+    previewBody.innerHTML = `
+      <pre class="preview-text">${escapeHtml(payload.text || "")}</pre>
+      ${payload.truncated ? `<div class="preview-note">Preview is truncated.</div>` : ""}
+    `;
+    return;
+  }
+
+  if (payload.kind === "archive") {
+    previewBody.innerHTML = `
+      <ul class="archive-list">
+        ${(payload.entries || [])
+          .map((entry) => `<li><span>${entry.directory ? "Folder" : "File"}</span>${escapeHtml(entry.name)}</li>`)
+          .join("")}
+      </ul>
+      ${payload.truncated ? `<div class="preview-note">Archive list is truncated.</div>` : ""}
+    `;
+    return;
+  }
+
+  previewBody.innerHTML = `<div class="preview-state">${escapeHtml(payload.message || "Preview is not available for this file type.")}</div>`;
+}
+
+async function openPreview(document) {
+  if (!document?.url) return;
+  hideError();
+  showPreviewLoading(document);
+
+  try {
+    const params = new URLSearchParams({
+      url: document.url,
+      title: document.title || "",
+      format: document.format || "",
+    });
+    const response = await fetch(`/api/preview?${params.toString()}`);
+    const payload = await response.json();
+    if (!response.ok || payload.error) throw new Error(payload.error || "Could not load preview.");
+    renderPreview(payload);
+  } catch (error) {
+    previewBody.innerHTML = `<div class="preview-state">${escapeHtml(error.message || "Could not load preview.")}</div>`;
+  }
+}
+
+function closePreview() {
+  previewPanel.classList.add("hidden");
+  previewTitle.textContent = "Document preview";
+  previewBody.innerHTML = "";
+}
+
 keywordEditor.addEventListener("submit", async (event) => {
   const formEl = event.target.closest(".keyword-add");
   if (!formEl) return;
@@ -343,6 +483,15 @@ filters.addEventListener("click", (event) => {
   filters.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === button));
   renderDocuments();
 });
+
+documentsEl.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-preview-key]");
+  if (!button || !currentData) return;
+  const document = currentData.documents.find((item) => item.previewKey === button.dataset.previewKey);
+  await openPreview(document);
+});
+
+previewClose.addEventListener("click", closePreview);
 
 copyLinks.addEventListener("click", async () => {
   if (!currentData) return;

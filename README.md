@@ -4,7 +4,7 @@ Local app for extracting attached documents from a Prozorro tender and ranking t
 
 ## Why Node
 
-Node is a good fit for this local app because the user only needs one runtime, the UI runs in the browser, and the server can call the public Prozorro APIs without a heavier desktop wrapper. This project currently has no npm dependencies.
+Node is a good fit for this local app because the user only needs one runtime, the UI runs in the browser, and the server can call the public Prozorro APIs without a heavier desktop wrapper.
 
 ## Run on Mac
 
@@ -13,6 +13,7 @@ Node is a good fit for this local app because the user only needs one runtime, t
 3. Run:
 
 ```sh
+npm install
 chmod +x start.command
 ./start.command
 ```
@@ -28,6 +29,25 @@ You can also run it manually:
 ```sh
 npm start
 ```
+
+## File Preview
+
+Use the `Preview` button on a document row to view file content inside the app without saving it to the Downloads folder.
+
+Supported preview types:
+
+- PDF and images: embedded viewer through the local app
+- DOCX: extracted HTML/text preview
+- XLSX and CSV: table preview, limited to the first rows/columns
+- TXT, XML, JSON, HTML: text preview
+- ZIP: file list preview
+
+Unsupported or skipped:
+
+- P7S signature files
+- RAR/7Z archive contents
+- old `.xls` spreadsheets
+- scanned PDFs do not have searchable text unless OCR is added later
 
 ## What It Checks
 
