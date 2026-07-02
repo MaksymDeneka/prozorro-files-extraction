@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prozorro Document Prioritizer</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace">
+        <aside class="sidebar">
+          <div class="brand">
+            <span class="brand-mark">P</span>
+            <div>
+              <h1>Prozorro Documents</h1>
+              <p>Local tender file ranking</p>
+            </div>
+          </div>
+
+          <form id="search-form" class="search-form">
+            <label for="tender-id">Tender ID</label>
+            <div class="search-row">
+              <input
+                id="tender-id"
+                name="tender-id"
+                autocomplete="off"
+                placeholder="UA-2026-07-02-003111-a"
+                required
+              />
+              <button type="submit" aria-label="Analyze tender">
+                <span>Analyze</span>
+              </button>
+            </div>
+          </form>
+
+          <div class="rules">
+            <h2>Priority rules</h2>
+            <ol>
+              <li><strong>Top</strong> Технічний опис</li>
+              <li><strong>High</strong> Додаток 2, технічна специфікація, відомість ресурсів, кошторис</li>
+              <li><strong>Low</strong> договір, критерії, банківська гарантія, довідка</li>
+            </ol>
+          </div>
+        </aside>
+
+        <section class="content">
+          <div id="empty-state" class="empty-state">
+            <p class="eyebrow">Ready</p>
+            <h2>Paste a Prozorro tender ID to extract and rank attached files.</h2>
+          </div>
+
+          <div id="loading" class="loading hidden">
+            <div class="pulse"></div>
+            <span>Loading tender documents</span>
+          </div>
+
+          <div id="error" class="error hidden"></div>
+
+          <section id="results" class="results hidden">
+            <header class="results-header">
+              <div>
+                <p id="result-id" class="eyebrow"></p>
+                <h2 id="result-title"></h2>
+                <p id="result-meta"></p>
+              </div>
+              <div class="actions">
+                <button id="copy-links" type="button">Copy links</button>
+                <button id="export-json" type="button">Export JSON</button>
+              </div>
+            </header>
+
+            <div class="metrics" id="metrics"></div>
+
+            <div class="filters" id="filters">
+              <button class="active" type="button" data-filter="all">All</button>
+              <button type="button" data-filter="Найвищий">Top</button>
+              <button type="button" data-filter="Високий">High</button>
+              <button type="button" data-filter="Середній">Middle</button>
+              <button type="button" data-filter="Низький">Low</button>
+            </div>
+
+            <div id="documents" class="documents"></div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
