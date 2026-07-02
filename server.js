@@ -20,11 +20,6 @@ const PUBLIC_API = "https://public-api.prozorro.gov.ua/api/2.5/tenders";
 const UUID_RE = /^[a-f0-9]{32}$/i;
 const ALLOWED_DOCUMENT_HOSTS = new Set(["public.docs.openprocurement.org"]);
 const MAX_PREVIEW_BYTES = 35 * 1024 * 1024;
-const MAX_TEXT_CHARS = 220000;
-const MAX_RTF_CHARS = 8 * 1024 * 1024;
-const MAX_TABLE_ROWS = 120;
-const MAX_TABLE_COLS = 30;
-const MAX_ARCHIVE_ITEMS = 250;
 const MAX_TIFF_PIXELS = 45_000_000;
 
 const LEVELS = {
@@ -391,8 +386,7 @@ function tiffToPngBuffer(buffer) {
 }
 
 function decodeText(buffer) {
-  const sample = buffer.subarray(0, Math.min(buffer.byteLength, MAX_TEXT_CHARS));
-  return new TextDecoder("utf-8", { fatal: false }).decode(sample);
+  return new TextDecoder("utf-8", { fatal: false }).decode(buffer);
 }
 
 function escapeHtml(value) {
@@ -429,7 +423,7 @@ function decodeRtfHexByte(hex, decoder) {
 }
 
 function rtfToHtml(buffer) {
-  const raw = buffer.toString("latin1").slice(0, MAX_RTF_CHARS);
+  const raw = buffer.toString("latin1");
   const codepage = raw.match(/\\ansicpg(\d+)/)?.[1] || "1251";
   const decoder = decoderForCodepage(codepage);
   const ignoredDestinations = new Set([
@@ -685,7 +679,6 @@ function rtfToHtml(buffer) {
 
   return blocks.length
     ? blocks
-        .slice(0, 1200)
         .map((block) => {
           if (block.type === "table") {
             return renderRtfTable(block.rows);
@@ -729,28 +722,27 @@ function parseCsv(text) {
       rows.push(row);
       row = [];
       value = "";
-      if (rows.length >= MAX_TABLE_ROWS) break;
     } else if (char !== "\r") {
       value += char;
     }
   }
 
-  if (rows.length < MAX_TABLE_ROWS && (value || row.length)) {
+  if (value || row.length) {
     row.push(value);
     rows.push(row);
   }
 
-  return rows.map((item) => item.slice(0, MAX_TABLE_COLS));
+  return rows;
 }
 
 function normalizeSpreadsheetRow(row) {
-  if (Array.isArray(row)) return row.slice(0, MAX_TABLE_COLS);
-  if (row && typeof row === "object" && Number.isInteger(row.length)) return Array.from(row).slice(0, MAX_TABLE_COLS);
+  if (Array.isArray(row)) return row;
+  if (row && typeof row === "object" && Number.isInteger(row.length)) return Array.from(row);
   return [];
 }
 
 function normalizeSpreadsheetRows(rows) {
-  return Array.isArray(rows) ? rows.slice(0, MAX_TABLE_ROWS).map(normalizeSpreadsheetRow) : [];
+  return Array.isArray(rows) ? rows.map(normalizeSpreadsheetRow) : [];
 }
 
 function normalizeSpreadsheetSheets(workbook) {
@@ -769,19 +761,6 @@ function normalizeSpreadsheetSheets(workbook) {
     name: sheet?.sheet || sheet?.name || `Sheet ${index + 1}`,
     rows: normalizeSpreadsheetRows(sheet?.data || sheet?.rows),
   }));
-}
-
-function isSpreadsheetPreviewTruncated(workbook) {
-  const rowGroups =
-    Array.isArray(workbook) && workbook.every((row) => Array.isArray(row))
-      ? [workbook]
-      : Array.isArray(workbook)
-        ? workbook.map((sheet) => sheet?.data || sheet?.rows || [])
-        : [];
-
-  return rowGroups.some(
-    (rows) => Array.isArray(rows) && (rows.length > MAX_TABLE_ROWS || rows.some((row) => Array.isArray(row) && row.length > MAX_TABLE_COLS)),
-  );
 }
 
 async function buildDocumentPreview({ documentUrl, title, format }) {
@@ -833,7 +812,6 @@ async function buildDocumentPreview({ documentUrl, title, format }) {
       kind,
       title,
       sheets,
-      truncated: isSpreadsheetPreviewTruncated(workbook),
     };
   }
 
@@ -844,7 +822,6 @@ async function buildDocumentPreview({ documentUrl, title, format }) {
       kind: "xlsx",
       title,
       sheets: [{ name: "CSV", rows }],
-      truncated: text.length >= MAX_TEXT_CHARS || rows.length >= MAX_TABLE_ROWS,
     };
   }
 
@@ -854,7 +831,6 @@ async function buildDocumentPreview({ documentUrl, title, format }) {
       kind,
       title,
       text,
-      truncated: buffer.byteLength > Buffer.byteLength(text),
     };
   }
 
@@ -868,19 +844,16 @@ async function buildDocumentPreview({ documentUrl, title, format }) {
     }
 
     const zip = await JSZip.loadAsync(buffer);
-    const entries = Object.values(zip.files)
-      .slice(0, MAX_ARCHIVE_ITEMS)
-      .map((entry) => ({
-        name: entry.name,
-        directory: entry.dir,
-        date: entry.date?.toISOString?.() || "",
-      }));
+    const entries = Object.values(zip.files).map((entry) => ({
+      name: entry.name,
+      directory: entry.dir,
+      date: entry.date?.toISOString?.() || "",
+    }));
 
     return {
       kind: "archive",
       title,
       entries,
-      truncated: Object.keys(zip.files).length > MAX_ARCHIVE_ITEMS,
     };
   }
 

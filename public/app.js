@@ -407,7 +407,6 @@ function renderPreview(payload) {
   if (payload.kind === "xlsx") {
     previewBody.innerHTML = `
       ${(payload.sheets || []).map(renderPreviewTable).join("")}
-      ${payload.truncated ? `<div class="preview-note">Preview is truncated.</div>` : ""}
     `;
     return;
   }
@@ -415,7 +414,6 @@ function renderPreview(payload) {
   if (payload.kind === "text") {
     previewBody.innerHTML = `
       <pre class="preview-text">${escapeHtml(payload.text || "")}</pre>
-      ${payload.truncated ? `<div class="preview-note">Preview is truncated.</div>` : ""}
     `;
     return;
   }
@@ -427,7 +425,6 @@ function renderPreview(payload) {
           .map((entry) => `<li><span>${entry.directory ? "Folder" : "File"}</span>${escapeHtml(entry.name)}</li>`)
           .join("")}
       </ul>
-      ${payload.truncated ? `<div class="preview-note">Archive list is truncated.</div>` : ""}
     `;
     return;
   }

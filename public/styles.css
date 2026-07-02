@@ -384,13 +384,10 @@ button:disabled {
 .results-header h2 {
   max-width: 980px;
   margin: 6px 0 10px;
-  display: -webkit-box;
-  overflow: hidden;
   font-size: 26px;
   line-height: 1.18;
   letter-spacing: 0;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
+  overflow-wrap: anywhere;
 }
 
 .actions,
@@ -584,13 +581,10 @@ body.preview-resizing {
 }
 
 .preview-header h2 {
-  display: -webkit-box;
-  overflow: hidden;
   margin-top: 4px;
   font-size: 18px;
   line-height: 1.25;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 
 .preview-controls {
