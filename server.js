@@ -425,6 +425,7 @@ function rtfToHtml(buffer) {
   let paragraph = "";
   let currentTable = [];
   let currentRow = null;
+  let currentRowBounds = [];
   let currentCell = "";
   let inTable = false;
   let ignore = false;
@@ -450,30 +451,39 @@ function rtfToHtml(buffer) {
     paragraph = "";
   }
 
-  function flushTable() {
-    if (currentRow && currentRow.some((cell) => cleanCell(cell))) {
-      currentRow.push(cleanCell(currentCell));
-      currentTable.push(currentRow);
+  function commitCurrentRow() {
+    if (!currentRow) return;
+    if (currentCell.trim()) finishCell();
+    if (currentRow.some(Boolean)) {
+      currentTable.push({
+        cells: currentRow.map(cleanCell),
+        bounds: currentRowBounds.slice(0, currentRow.length),
+      });
     }
+    currentRow = null;
+    currentRowBounds = [];
+    currentCell = "";
+    inTable = false;
+  }
 
-    const rows = currentTable
-      .map((row) => row.map(cleanCell).filter((cell, index, array) => cell || array.length > 1 || index === 0))
-      .filter((row) => row.some(Boolean));
+  function flushTable(includeCurrentRow = true) {
+    if (includeCurrentRow) commitCurrentRow();
+
+    const rows = currentTable.filter((row) => row.cells.some(Boolean));
 
     if (rows.length) blocks.push({ type: "table", rows });
     currentTable = [];
     currentRow = null;
+    currentRowBounds = [];
     currentCell = "";
     inTable = false;
   }
 
   function startRow() {
+    if (currentRow) return;
     flushParagraph();
-    if (currentRow && currentRow.some((cell) => cleanCell(cell))) {
-      currentRow.push(cleanCell(currentCell));
-      currentTable.push(currentRow);
-    }
     currentRow = [];
+    currentRowBounds = [];
     currentCell = "";
     inTable = true;
   }
@@ -485,12 +495,51 @@ function rtfToHtml(buffer) {
   }
 
   function finishRow() {
-    if (!currentRow) currentRow = [];
-    if (currentCell.trim()) finishCell();
-    if (currentRow.some(Boolean)) currentTable.push(currentRow);
-    currentRow = null;
-    currentCell = "";
-    inTable = false;
+    commitCurrentRow();
+  }
+
+  function addCellBoundary(value) {
+    if (!currentRow) startRow();
+    if (currentRow.length || currentCell.trim()) return;
+    currentRowBounds.push(value);
+  }
+
+  function renderRtfTable(rows) {
+    const grid =
+      rows
+        .map((row) => row.bounds)
+        .filter((bounds) => bounds.length)
+        .sort((a, b) => b.length - a.length)[0] || [];
+
+    const colgroup = grid.length ? `<colgroup>${grid.map(() => "<col>").join("")}</colgroup>` : "";
+
+    return `<table>${colgroup}${rows
+      .map((row) => {
+        let previousGridIndex = -1;
+        const cells = row.cells.map((cell, index) => {
+          let colspan = 1;
+
+          if (grid.length > 1 && row.cells.length === 1) {
+            colspan = grid.length;
+            previousGridIndex = grid.length - 1;
+          } else if (grid.length && row.bounds[index] !== undefined) {
+            const rightBound = row.bounds[index];
+            let gridIndex = grid.findIndex((bound) => Math.abs(bound - rightBound) <= 80);
+            if (gridIndex === -1) {
+              gridIndex = grid.findIndex((bound) => bound >= rightBound);
+            }
+            if (gridIndex === -1) gridIndex = previousGridIndex + 1;
+            colspan = Math.max(1, gridIndex - previousGridIndex);
+            previousGridIndex = gridIndex;
+          }
+
+          const span = colspan > 1 ? ` colspan="${colspan}"` : "";
+          return `<td${span}>${escapeHtml(cell).replace(/\n/g, "<br>")}</td>`;
+        });
+
+        return `<tr>${cells.join("")}</tr>`;
+      })
+      .join("")}</table>`;
   }
 
   function startsIgnoredDestination(index) {
@@ -573,6 +622,10 @@ function rtfToHtml(buffer) {
       i = skipFallback(i + 1, ucSkip) - 1;
     } else if (word === "trowd") {
       startRow();
+    } else if (word === "irow" && parameter === 0 && currentRow && currentRow.length === 0 && !currentCell.trim() && currentTable.length) {
+      flushTable(false);
+    } else if (word === "cellx" && Number.isInteger(parameter)) {
+      addCellBoundary(parameter);
     } else if (word === "intbl") {
       inTable = true;
       if (!currentRow) currentRow = [];
@@ -609,9 +662,7 @@ function rtfToHtml(buffer) {
         .slice(0, 1200)
         .map((block) => {
           if (block.type === "table") {
-            return `<table>${block.rows
-              .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell).replace(/\n/g, "<br>")}</td>`).join("")}</tr>`)
-              .join("")}</table>`;
+            return renderRtfTable(block.rows);
           }
 
           return `<p>${escapeHtml(block.text)}</p>`;
