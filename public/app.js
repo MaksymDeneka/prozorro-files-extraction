@@ -19,13 +19,13 @@ const filters = document.querySelector("#filters");
 const copyLinks = document.querySelector("#copy-links");
 const exportJson = document.querySelector("#export-json");
 const keywordEditor = document.querySelector("#keyword-editor");
-const saveRules = document.querySelector("#save-rules");
 const rulesStatus = document.querySelector("#rules-status");
+const undoDelete = document.querySelector("#undo-delete");
 
 let currentData = null;
 let currentFilter = "all";
 let priorityRules = [];
-let rulesDirty = false;
+let lastDeletedKeyword = null;
 
 function setBusy(isBusy) {
   loading.classList.toggle("hidden", !isBusy);
@@ -47,9 +47,8 @@ function setRulesStatus(message, tone = "") {
   rulesStatus.className = tone;
 }
 
-function markRulesDirty() {
-  rulesDirty = true;
-  setRulesStatus("Unsaved", "warning");
+function setUndoState() {
+  undoDelete.disabled = !lastDeletedKeyword;
 }
 
 function formatDate(value) {
@@ -90,10 +89,15 @@ function renderKeywordEditor() {
             ${rule.keywords
               .map(
                 (keyword) => `
-                  <button type="button" class="keyword-chip" data-remove-keyword="${escapeHtml(keyword)}">
+                  <span class="keyword-chip">
                     <span>${escapeHtml(keyword)}</span>
-                    <strong aria-hidden="true">×</strong>
-                  </button>
+                    <button
+                      type="button"
+                      class="keyword-remove"
+                      data-remove-keyword="${escapeHtml(keyword)}"
+                      aria-label="Remove ${escapeHtml(keyword)}"
+                    >×</button>
+                  </span>
                 `,
               )
               .join("")}
@@ -191,12 +195,14 @@ async function loadRules() {
   const data = await response.json();
   if (!response.ok || data.error) throw new Error(data.error || "Could not load keyword rules.");
   priorityRules = data.rules;
-  rulesDirty = false;
+  lastDeletedKeyword = null;
   renderKeywordEditor();
+  setUndoState();
   setRulesStatus("Saved", "saved");
 }
 
-async function saveKeywordRules() {
+async function persistKeywordRules() {
+  setRulesStatus("Saving", "");
   const response = await fetch("/api/rules", {
     method: "PUT",
     headers: { "content-type": "application/json" },
@@ -205,12 +211,21 @@ async function saveKeywordRules() {
   const data = await response.json();
   if (!response.ok || data.error) throw new Error(data.error || "Could not save keyword rules.");
   priorityRules = data.rules;
-  rulesDirty = false;
   renderKeywordEditor();
+  setUndoState();
   setRulesStatus("Saved", "saved");
 
   if (currentData && input.value.trim()) {
     await analyzeCurrentTender();
+  }
+}
+
+async function saveRulesAfterEdit() {
+  try {
+    await persistKeywordRules();
+  } catch (error) {
+    setRulesStatus("Error", "error-text");
+    showError(error.message || "Could not save keyword rules.");
   }
 }
 
@@ -256,7 +271,7 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-keywordEditor.addEventListener("submit", (event) => {
+keywordEditor.addEventListener("submit", async (event) => {
   const formEl = event.target.closest(".keyword-add");
   if (!formEl) return;
 
@@ -268,37 +283,52 @@ keywordEditor.addEventListener("submit", (event) => {
 
   if (!rule || !keyword || rule.keywords.some((item) => item.toLocaleLowerCase("uk-UA") === keyword.toLocaleLowerCase("uk-UA"))) return;
   rule.keywords.push(keyword);
+  lastDeletedKeyword = null;
   inputEl.value = "";
-  markRulesDirty();
   renderKeywordEditor();
+  setUndoState();
+  await saveRulesAfterEdit();
 });
 
-keywordEditor.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-remove-keyword]");
+keywordEditor.addEventListener("click", async (event) => {
+  const button = event.target.closest(".keyword-remove[data-remove-keyword]");
   if (!button) return;
 
   const group = button.closest(".keyword-group");
   const rule = priorityRules.find((item) => item.id === group.dataset.ruleId);
   if (!rule) return;
 
-  rule.keywords = rule.keywords.filter((keyword) => keyword !== button.dataset.removeKeyword);
-  markRulesDirty();
+  const keyword = button.dataset.removeKeyword;
+  const index = rule.keywords.indexOf(keyword);
+  if (index === -1) return;
+
+  lastDeletedKeyword = {
+    ruleId: rule.id,
+    keyword,
+    index,
+  };
+  rule.keywords.splice(index, 1);
   renderKeywordEditor();
+  setUndoState();
+  await saveRulesAfterEdit();
 });
 
-saveRules.addEventListener("click", async () => {
-  if (!rulesDirty) return;
-  saveRules.disabled = true;
-  setRulesStatus("Saving", "");
+undoDelete.addEventListener("click", async () => {
+  if (!lastDeletedKeyword) return;
 
-  try {
-    await saveKeywordRules();
-  } catch (error) {
-    setRulesStatus("Error", "error-text");
-    showError(error.message || "Could not save keyword rules.");
-  } finally {
-    saveRules.disabled = false;
+  const { ruleId, keyword, index } = lastDeletedKeyword;
+  const rule = priorityRules.find((item) => item.id === ruleId);
+  if (!rule || rule.keywords.some((item) => item.toLocaleLowerCase("uk-UA") === keyword.toLocaleLowerCase("uk-UA"))) {
+    lastDeletedKeyword = null;
+    setUndoState();
+    return;
   }
+
+  rule.keywords.splice(Math.min(index, rule.keywords.length), 0, keyword);
+  lastDeletedKeyword = null;
+  renderKeywordEditor();
+  setUndoState();
+  await saveRulesAfterEdit();
 });
 
 form.addEventListener("submit", async (event) => {

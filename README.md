@@ -33,7 +33,7 @@ npm start
 
 The app accepts either a visible tender ID like `UA-2026-07-02-003111-a` or a Prozorro internal 32-character tender UUID.
 
-Priority is based on editable normalized filename matching. Use the `Keyword rules` panel in the app to add or remove phrases for Top, High, and Low priority. The saved file is:
+Priority is based on editable normalized filename matching. Use the `Keyword rules` panel in the app to add or remove phrases for Top, High, and Low priority. Keyword edits are saved automatically. If a keyword is deleted accidentally, use `Undo` to restore the last deleted keyword. The saved file is:
 
 ```text
 data/priority-rules.json
