@@ -16,6 +16,7 @@ const PORT = Number(process.env.PORT || 3477);
 const PORTAL_API = "https://prozorro.gov.ua/api/tenders";
 const PUBLIC_API = "https://public-api.prozorro.gov.ua/api/2.5/tenders";
 const UUID_RE = /^[a-f0-9]{32}$/i;
+const ALLOWED_DOCUMENT_HOSTS = new Set(["public.docs.openprocurement.org"]);
 const MAX_PREVIEW_BYTES = 35 * 1024 * 1024;
 const MAX_TEXT_CHARS = 220000;
 const MAX_RTF_CHARS = 8 * 1024 * 1024;
@@ -285,7 +286,7 @@ function assertAllowedDocumentUrl(value) {
     throw new Error("Invalid document URL.");
   }
 
-  if (parsed.protocol !== "https:" || !parsed.hostname.endsWith("prozorro.gov.ua")) {
+  if (parsed.protocol !== "https:" || (!parsed.hostname.endsWith("prozorro.gov.ua") && !ALLOWED_DOCUMENT_HOSTS.has(parsed.hostname))) {
     throw new Error("Only Prozorro document URLs can be previewed.");
   }
 
@@ -302,7 +303,7 @@ function inferPreviewKind({ title, format, contentType }) {
 
   if (ext === ".p7s" || mime.includes("pkcs7")) return "signature";
   if (mime.includes("pdf") || ext === ".pdf") return "pdf";
-  if (mime.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(ext)) return "image";
+  if (mime.startsWith("image/") || [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].includes(ext)) return "image";
   if (ext === ".docx" || mime.includes("wordprocessingml.document")) return "docx";
   if (ext === ".rtf" || mime.includes("rtf") || mime.includes("richtext")) return "rtf";
   if (ext === ".xlsx" || mime.includes("spreadsheetml.sheet")) return "xlsx";
@@ -359,6 +360,7 @@ function inlineContentTypeFor(kind, title, contentType) {
     [".gif", "image/gif"],
     [".webp", "image/webp"],
     [".bmp", "image/bmp"],
+    [".svg", "image/svg+xml"],
   ]);
 
   return contentType.toLocaleLowerCase("en-US").startsWith("image/") ? contentType : imageTypes.get(ext) || "application/octet-stream";

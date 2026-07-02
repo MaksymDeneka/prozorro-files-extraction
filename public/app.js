@@ -16,6 +16,7 @@ const resultMeta = document.querySelector("#result-meta");
 const metrics = document.querySelector("#metrics");
 const documentsEl = document.querySelector("#documents");
 const filters = document.querySelector("#filters");
+const viewFilters = document.querySelector("#view-filters");
 const copyLinks = document.querySelector("#copy-links");
 const exportJson = document.querySelector("#export-json");
 const keywordEditor = document.querySelector("#keyword-editor");
@@ -31,9 +32,11 @@ const previewWider = document.querySelector("#preview-wider");
 
 let currentData = null;
 let currentFilter = "all";
+let currentViewFilter = "all";
 let priorityRules = [];
 let lastDeletedKeyword = null;
 const PREVIEW_WIDTH_KEY = "prozorro.previewWidth";
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]);
 
 function setBusy(isBusy) {
   loading.classList.toggle("hidden", !isBusy);
@@ -107,6 +110,19 @@ function priorityClass(level) {
   return "priority-mid";
 }
 
+function extensionFromTitle(title) {
+  const match = String(title || "")
+    .split("?")[0]
+    .toLocaleLowerCase("en-US")
+    .match(/\.[a-z0-9]+$/);
+  return match ? match[0] : "";
+}
+
+function isImageDocument(document) {
+  const mime = String(document.format || "").toLocaleLowerCase("en-US");
+  return mime.startsWith("image/") || IMAGE_EXTENSIONS.has(extensionFromTitle(document.title));
+}
+
 function renderKeywordEditor() {
   keywordEditor.innerHTML = priorityRules
     .map(
@@ -146,6 +162,7 @@ function renderKeywordEditor() {
 function renderMetrics(data) {
   const rows = [
     ["Total", data.counts.total],
+    ["Images", data.documents.filter(isImageDocument).length],
     ["Top", data.counts.top],
     ["High", data.counts.high],
     ["Low", data.counts.low],
@@ -167,13 +184,14 @@ function renderDocuments() {
   if (!currentData) return;
 
   const visible = currentData.documents.filter((document) => {
-    if (currentFilter === "all") return true;
-    return document.priority.level === currentFilter;
+    const matchesView = currentViewFilter === "all" || (currentViewFilter === "images" && isImageDocument(document));
+    const matchesPriority = currentFilter === "all" || document.priority.level === currentFilter;
+    return matchesView && matchesPriority;
   });
 
   documentsEl.innerHTML = visible.length
     ? visible.map(renderDocument).join("")
-    : `<div class="no-results">No files in this priority group.</div>`;
+    : `<div class="no-results">${currentViewFilter === "images" ? "No images match the current filters." : "No files match the current filters."}</div>`;
 }
 
 function renderDocument(document, index) {
@@ -275,8 +293,12 @@ async function analyzeCurrentTender() {
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
     currentFilter = "all";
+    currentViewFilter = "all";
     filters.querySelectorAll("button").forEach((button) => {
       button.classList.toggle("active", button.dataset.filter === "all");
+    });
+    viewFilters.querySelectorAll("button").forEach((button) => {
+      button.classList.toggle("active", button.dataset.viewFilter === "all");
     });
     renderResults(data);
   } catch (error) {
@@ -509,6 +531,14 @@ filters.addEventListener("click", (event) => {
   if (!button) return;
   currentFilter = button.dataset.filter;
   filters.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === button));
+  renderDocuments();
+});
+
+viewFilters.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-view-filter]");
+  if (!button) return;
+  currentViewFilter = button.dataset.viewFilter;
+  viewFilters.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === button));
   renderDocuments();
 });
 

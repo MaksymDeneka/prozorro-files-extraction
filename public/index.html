@@ -74,12 +74,19 @@
 
             <div class="metrics" id="metrics"></div>
 
-            <div class="filters" id="filters">
-              <button class="active" type="button" data-filter="all">All</button>
-              <button type="button" data-filter="Найвищий">Top</button>
-              <button type="button" data-filter="Високий">High</button>
-              <button type="button" data-filter="Середній">Middle</button>
-              <button type="button" data-filter="Низький">Low</button>
+            <div class="filter-bar">
+              <div class="filters" id="view-filters" aria-label="File type filter">
+                <button class="active" type="button" data-view-filter="all">All files</button>
+                <button type="button" data-view-filter="images">Images</button>
+              </div>
+
+              <div class="filters" id="filters" aria-label="Priority filter">
+                <button class="active" type="button" data-filter="all">All priorities</button>
+                <button type="button" data-filter="Найвищий">Top</button>
+                <button type="button" data-filter="Високий">High</button>
+                <button type="button" data-filter="Середній">Middle</button>
+                <button type="button" data-filter="Низький">Low</button>
+              </div>
             </div>
 
             <div id="documents" class="documents"></div>

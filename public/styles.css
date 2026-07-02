@@ -394,11 +394,18 @@ button:disabled {
 }
 
 .actions,
+.filter-bar,
 .filters {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: flex-start;
+}
+
+.filter-bar {
+  justify-content: space-between;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
 }
 
 .actions {
@@ -412,7 +419,7 @@ button:disabled {
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
   border: 1px solid var(--line);
 }
 
@@ -821,12 +828,11 @@ body.preview-resizing {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .metric:nth-child(2) {
+  .metric:nth-child(even) {
     border-right: 0;
   }
 
-  .metric:nth-child(1),
-  .metric:nth-child(2) {
+  .metric:not(:last-child) {
     border-bottom: 1px solid var(--line);
   }
 
