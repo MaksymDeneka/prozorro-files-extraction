@@ -717,6 +717,47 @@ function parseCsv(text) {
   return rows.map((item) => item.slice(0, MAX_TABLE_COLS));
 }
 
+function normalizeSpreadsheetRow(row) {
+  if (Array.isArray(row)) return row.slice(0, MAX_TABLE_COLS);
+  if (row && typeof row === "object" && Number.isInteger(row.length)) return Array.from(row).slice(0, MAX_TABLE_COLS);
+  return [];
+}
+
+function normalizeSpreadsheetRows(rows) {
+  return Array.isArray(rows) ? rows.slice(0, MAX_TABLE_ROWS).map(normalizeSpreadsheetRow) : [];
+}
+
+function normalizeSpreadsheetSheets(workbook) {
+  if (!Array.isArray(workbook)) return [];
+
+  if (workbook.every((row) => Array.isArray(row))) {
+    return [
+      {
+        name: "Sheet 1",
+        rows: normalizeSpreadsheetRows(workbook),
+      },
+    ];
+  }
+
+  return workbook.map((sheet, index) => ({
+    name: sheet?.sheet || sheet?.name || `Sheet ${index + 1}`,
+    rows: normalizeSpreadsheetRows(sheet?.data || sheet?.rows),
+  }));
+}
+
+function isSpreadsheetPreviewTruncated(workbook) {
+  const rowGroups =
+    Array.isArray(workbook) && workbook.every((row) => Array.isArray(row))
+      ? [workbook]
+      : Array.isArray(workbook)
+        ? workbook.map((sheet) => sheet?.data || sheet?.rows || [])
+        : [];
+
+  return rowGroups.some(
+    (rows) => Array.isArray(rows) && (rows.length > MAX_TABLE_ROWS || rows.some((row) => Array.isArray(row) && row.length > MAX_TABLE_COLS)),
+  );
+}
+
 async function buildDocumentPreview({ documentUrl, title, format }) {
   const safeUrl = assertAllowedDocumentUrl(documentUrl);
   const initialKind = inferPreviewKind({ title, format });
@@ -760,17 +801,13 @@ async function buildDocumentPreview({ documentUrl, title, format }) {
   }
 
   if (kind === "xlsx") {
-    const rows = await readXlsxFile(buffer);
+    const workbook = await readXlsxFile(buffer);
+    const sheets = normalizeSpreadsheetSheets(workbook);
     return {
       kind,
       title,
-      sheets: [
-        {
-          name: "Sheet 1",
-          rows: rows.slice(0, MAX_TABLE_ROWS).map((row) => row.slice(0, MAX_TABLE_COLS)),
-        },
-      ],
-      truncated: rows.length > MAX_TABLE_ROWS || rows.some((row) => row.length > MAX_TABLE_COLS),
+      sheets,
+      truncated: isSpreadsheetPreviewTruncated(workbook),
     };
   }
 
