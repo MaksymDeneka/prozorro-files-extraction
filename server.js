@@ -210,44 +210,25 @@ function rankDocument(document, rules) {
   };
 }
 
-function collectDocuments(value, trail = "tender", results = []) {
-  if (!value || typeof value !== "object") return results;
+function normalizeTenderDocuments(documents) {
+  if (!Array.isArray(documents)) return [];
 
-  if (Array.isArray(value)) {
-    for (const item of value) collectDocuments(item, trail, results);
-    return results;
-  }
-
-  for (const [key, child] of Object.entries(value)) {
-    if (key === "documents" && Array.isArray(child)) {
-      for (const document of child) {
-        if (document && typeof document === "object" && document.title) {
-          results.push({
-            id: document.id || "",
-            title: document.title || "",
-            url: document.url || "",
-            format: document.format || "",
-            hash: document.hash || "",
-            documentType: document.documentType || "",
-            documentOf: document.documentOf || "",
-            datePublished: document.datePublished || "",
-            dateModified: document.dateModified || "",
-            author: document.author || "",
-            language: document.language || "",
-            source: trail,
-          });
-        }
-      }
-      continue;
-    }
-
-    if (child && typeof child === "object") {
-      const nextTrail = Array.isArray(child) ? `${trail}.${key}` : trail;
-      collectDocuments(child, nextTrail, results);
-    }
-  }
-
-  return results;
+  return documents
+    .filter((document) => document && typeof document === "object" && document.title)
+    .map((document) => ({
+      id: document.id || "",
+      title: document.title || "",
+      url: document.url || "",
+      format: document.format || "",
+      hash: document.hash || "",
+      documentType: document.documentType || "",
+      documentOf: document.documentOf || "",
+      datePublished: document.datePublished || "",
+      dateModified: document.dateModified || "",
+      author: document.author || "",
+      language: document.language || "",
+      source: "tender.documents",
+    }));
 }
 
 function dedupeDocuments(documents) {
@@ -912,12 +893,14 @@ async function analyzeTender(input) {
   const resolved = await resolveTenderId(input);
   if (!resolved?.id) throw new Error("Tender was not found.");
 
-  const [{ data: tender }, rules] = await Promise.all([
-    fetchJson(`${PUBLIC_API}/${encodeURIComponent(resolved.id)}`),
+  const tenderFields = "id,tenderID,title,dateModified,status,procurementMethodType,procuringEntity,value";
+  const [{ data: tender }, { data: tenderDocuments }, rules] = await Promise.all([
+    fetchJson(`${PUBLIC_API}/${encodeURIComponent(resolved.id)}?opt_fields=${tenderFields}`),
+    fetchJson(`${PUBLIC_API}/${encodeURIComponent(resolved.id)}/documents`),
     getPriorityRules(),
   ]);
 
-  const documents = dedupeDocuments(collectDocuments(tender))
+  const documents = dedupeDocuments(normalizeTenderDocuments(tenderDocuments))
     .map((document) => rankDocument(document, rules))
     .sort((a, b) => {
       if (b.priority.score !== a.priority.score) return b.priority.score - a.priority.score;

@@ -87,4 +87,5 @@ Example: `ТЕХНІЧНА_специфікація-final.pdf` can match `тех
 ## API Sources
 
 - Visible `UA-...` IDs are resolved through `https://prozorro.gov.ua/api/tenders/{tenderID}/summary`
-- Full tender data and document URLs are read from `https://public-api.prozorro.gov.ua/api/2.5/tenders/{internalId}`
+- Tender metadata is read from `https://public-api.prozorro.gov.ua/api/2.5/tenders/{internalId}` with selected fields
+- Tender-level document URLs are read from `https://public-api.prozorro.gov.ua/api/2.5/tenders/{internalId}/documents`
